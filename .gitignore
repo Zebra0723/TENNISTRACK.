@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.log
+
+# Never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# setup-agent local state (logs/backups are machine-local)
+.setup-agent/logs/
+.setup-agent/backups/
+
+# Local Claude Code settings (personal)
+.claude/settings.local.json

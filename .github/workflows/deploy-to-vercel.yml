@@ -1,0 +1,191 @@
+name: Deploy to Vercel
+
+# The bot. Trigger it from the GitHub UI (Actions -> "Deploy to Vercel" ->
+# Run workflow), fill in the repo you want deployed, and walk away. When it
+# finishes the live URL is printed to the run summary AND saved as a
+# downloadable artifact named "deployment-result".
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Repo to deploy (owner/name). Leave blank to deploy THIS repo."
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: "Branch, tag, or commit SHA (blank = default branch)."
+        required: false
+        default: ""
+        type: string
+      production:
+        description: "Deploy to production? (unchecked = preview URL)"
+        required: false
+        default: true
+        type: boolean
+      install_command:
+        description: "Override install command (optional, e.g. 'pnpm install')."
+        required: false
+        default: ""
+        type: string
+      build_command:
+        description: "Override build command (optional)."
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: deploy-${{ github.event.inputs.repository || github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve target
+        id: target
+        run: |
+          REPO="${{ github.event.inputs.repository }}"
+          if [ -z "$REPO" ]; then
+            REPO="${{ github.repository }}"
+          fi
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+          # Sanitize into a stable, Vercel-friendly project name. Vercel derives
+          # the project name from the checkout directory, so deploying the same
+          # repo repeatedly updates one project instead of creating new ones.
+          NAME=$(echo "$REPO" | tr '/' '-' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g' | cut -c1-100)
+          echo "project=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Deploying '$REPO' as Vercel project '$NAME'"
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.target.outputs.repo }}
+          ref: ${{ github.event.inputs.ref }}
+          # GH_PAT is needed to reach private repos or repos other than this one.
+          # Falls back to the built-in token for this repo / public repos.
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          path: ${{ steps.target.outputs.project }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Deploy
+        id: deploy
+        working-directory: ${{ steps.target.outputs.project }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          INSTALL_CMD: ${{ github.event.inputs.install_command }}
+          BUILD_CMD: ${{ github.event.inputs.build_command }}
+          PRODUCTION: ${{ github.event.inputs.production }}
+        run: |
+          set -eo pipefail
+
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::VERCEL_TOKEN secret is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+          PROD_FLAG=""
+          TARGET="preview"
+          if [ "$PRODUCTION" = "true" ]; then
+            PROD_FLAG="--prod"
+            TARGET="production"
+          fi
+
+          # Optional command overrides via vercel.json so autodetection can be
+          # bypassed for non-standard projects.
+          if [ -n "$INSTALL_CMD" ] || [ -n "$BUILD_CMD" ]; then
+            node -e '
+              const fs = require("fs");
+              const path = "vercel.json";
+              let cfg = {};
+              if (fs.existsSync(path)) { try { cfg = JSON.parse(fs.readFileSync(path, "utf8")); } catch (e) {} }
+              if (process.env.INSTALL_CMD) cfg.installCommand = process.env.INSTALL_CMD;
+              if (process.env.BUILD_CMD) cfg.buildCommand = process.env.BUILD_CMD;
+              fs.writeFileSync(path, JSON.stringify(cfg, null, 2));
+              console.log("Wrote overrides to vercel.json:", JSON.stringify(cfg));
+            '
+          fi
+
+          echo "Deploying to $TARGET..."
+          # Vercel prints the deployment URL to stdout; build logs go to stderr,
+          # so capturing stdout gives us just the URL.
+          set +e
+          URL=$(vercel deploy $PROD_FLAG --yes --token="$VERCEL_TOKEN")
+          STATUS=$?
+          set -e
+
+          if [ $STATUS -ne 0 ] || [ -z "$URL" ]; then
+            echo "::error::Vercel deployment failed (exit $STATUS)."
+            exit 1
+          fi
+
+          # Grab the last https URL in case extra lines slip into stdout.
+          URL=$(printf '%s\n' "$URL" | grep -Eo 'https://[a-zA-Z0-9._/-]+' | tail -n1)
+
+          echo "Deployed: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Write deployment result
+        if: steps.deploy.outputs.url != ''
+        run: |
+          mkdir -p deployment-result
+          URL="${{ steps.deploy.outputs.url }}"
+          REPO="${{ steps.target.outputs.repo }}"
+          REF="${{ github.event.inputs.ref }}"
+          [ -z "$REF" ] && REF="(default branch)"
+          TARGET="preview"
+          [ "${{ github.event.inputs.production }}" = "true" ] && TARGET="production"
+
+          echo "$URL" > deployment-result/deployment-url.txt
+
+          {
+            echo "# Deployment succeeded"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Repository | \`$REPO\` |"
+            echo "| Ref | \`$REF\` |"
+            echo "| Target | $TARGET |"
+            echo "| URL | $URL |"
+          } > deployment-result/deployment.md
+
+      - name: Upload deployment artifact
+        if: steps.deploy.outputs.url != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-result
+          path: deployment-result/
+
+      - name: Publish run summary
+        if: always()
+        run: |
+          URL="${{ steps.deploy.outputs.url }}"
+          if [ -n "$URL" ]; then
+            {
+              echo "## 🚀 Deployed to Vercel"
+              echo ""
+              echo "**Repository:** \`${{ steps.target.outputs.repo }}\`"
+              echo ""
+              echo "**Live URL:** [$URL]($URL)"
+              echo ""
+              echo "The URL is also attached to this run as the **deployment-result** artifact."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## ❌ Deployment failed"
+              echo ""
+              echo "Check the **Deploy** step logs above. Most common causes: a missing"
+              echo "\`VERCEL_TOKEN\` secret, or a private target repo without a \`GH_PAT\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,42 @@
+{
+  "name": "setup-agent",
+  "version": "1.0.0",
+  "description": "A commandable developer setup agent: connect GitHub/Vercel/Supabase and do safe project plumbing from plain-English or structured commands.",
+  "type": "module",
+  "bin": {
+    "setup-agent": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "cli",
+    "setup",
+    "supabase",
+    "vercel",
+    "github",
+    "env",
+    "scaffold"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
