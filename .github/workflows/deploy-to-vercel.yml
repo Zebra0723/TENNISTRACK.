@@ -69,6 +69,22 @@ jobs:
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           path: ${{ steps.target.outputs.project }}
 
+      - name: Inspect checkout
+        working-directory: ${{ steps.target.outputs.project }}
+        run: |
+          echo "Top-level contents of the checked-out repo:"
+          ls -la
+          echo ""
+          echo "File tree (2 levels deep, excluding .git):"
+          find . -maxdepth 2 -not -path './.git/*' | sort | head -80
+          COUNT=$(find . -type f -not -path './.git/*' | wc -l)
+          echo ""
+          echo "Deployable files found (excluding .git): $COUNT"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::'${{ steps.target.outputs.repo }}' (ref: ${{ github.event.inputs.ref || 'default branch' }}) checked out with NO files. The app is likely on a different branch, inside a subfolder, or not pushed yet. Re-run with the correct Ref, or move the app to the repo root."
+            exit 1
+          fi
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -117,11 +133,48 @@ jobs:
             '
           fi
 
+          # Auto-detect the framework and pin it in vercel.json so the deploy
+          # uses the correct build output — even if the Vercel project was
+          # previously created with the wrong preset (e.g. "Other", which looks
+          # for a non-existent public/ dir on a Next.js app).
+          node -e '
+            const fs = require("fs");
+            let pkg = {}; try { pkg = JSON.parse(fs.readFileSync("package.json", "utf8")); } catch (e) {}
+            const deps = Object.assign({}, pkg.dependencies, pkg.devDependencies);
+            const has = (n) => Boolean(deps[n]);
+            const exists = (f) => fs.existsSync(f);
+            let fw = null;
+            if (has("next") || exists("next.config.js") || exists("next.config.mjs") || exists("next.config.ts")) fw = "nextjs";
+            else if (has("@remix-run/react")) fw = "remix";
+            else if (has("astro")) fw = "astro";
+            else if (has("@sveltejs/kit")) fw = "sveltekit";
+            else if (has("nuxt") || has("nuxt3")) fw = "nuxt";
+            else if (has("vite")) fw = "vite";
+            else if (has("react-scripts")) fw = "create-react-app";
+            let cfg = {}; try { cfg = JSON.parse(fs.readFileSync("vercel.json", "utf8")); } catch (e) {}
+            if (fw && !cfg.framework) {
+              cfg.framework = fw;
+              fs.writeFileSync("vercel.json", JSON.stringify(cfg, null, 2));
+              console.log("Pinned framework in vercel.json:", fw);
+            } else {
+              console.log("Framework detection:", fw || "none/static", "(vercel.json left as-is)");
+            }
+          '
+
+          # The checked-out target still contains a .git directory pointing at
+          # the source repo. Left in place, `vercel deploy` switches into
+          # git-connected mode and uploads ZERO files ("There are no files
+          # inside your deployment"), producing an empty 404 site. Removing .git
+          # (and any stale .vercel) makes Vercel treat the folder as plain files
+          # and autodetect the framework (Next.js, Vite, etc.) so it truly builds.
+          rm -rf .git .vercel
+
           echo "Deploying to $TARGET..."
           # Vercel prints the deployment URL to stdout; build logs go to stderr,
-          # so capturing stdout gives us just the URL.
+          # so capturing stdout gives us just the URL. --archive=tgz bundles the
+          # source so every local file is uploaded regardless of git state.
           set +e
-          URL=$(vercel deploy $PROD_FLAG --yes --token="$VERCEL_TOKEN")
+          URL=$(vercel deploy $PROD_FLAG --yes --archive=tgz --token="$VERCEL_TOKEN")
           STATUS=$?
           set -e
 
