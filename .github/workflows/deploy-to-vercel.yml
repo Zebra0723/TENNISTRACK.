@@ -117,11 +117,20 @@ jobs:
             '
           fi
 
+          # The checked-out target still contains a .git directory pointing at
+          # the source repo. Left in place, `vercel deploy` switches into
+          # git-connected mode and uploads ZERO files ("There are no files
+          # inside your deployment"), producing an empty 404 site. Removing .git
+          # (and any stale .vercel) makes Vercel treat the folder as plain files
+          # and autodetect the framework (Next.js, Vite, etc.) so it truly builds.
+          rm -rf .git .vercel
+
           echo "Deploying to $TARGET..."
           # Vercel prints the deployment URL to stdout; build logs go to stderr,
-          # so capturing stdout gives us just the URL.
+          # so capturing stdout gives us just the URL. --archive=tgz bundles the
+          # source so every local file is uploaded regardless of git state.
           set +e
-          URL=$(vercel deploy $PROD_FLAG --yes --token="$VERCEL_TOKEN")
+          URL=$(vercel deploy $PROD_FLAG --yes --archive=tgz --token="$VERCEL_TOKEN")
           STATUS=$?
           set -e
 
