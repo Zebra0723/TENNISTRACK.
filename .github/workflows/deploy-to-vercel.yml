@@ -69,6 +69,22 @@ jobs:
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           path: ${{ steps.target.outputs.project }}
 
+      - name: Inspect checkout
+        working-directory: ${{ steps.target.outputs.project }}
+        run: |
+          echo "Top-level contents of the checked-out repo:"
+          ls -la
+          echo ""
+          echo "File tree (2 levels deep, excluding .git):"
+          find . -maxdepth 2 -not -path './.git/*' | sort | head -80
+          COUNT=$(find . -type f -not -path './.git/*' | wc -l)
+          echo ""
+          echo "Deployable files found (excluding .git): $COUNT"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::'${{ steps.target.outputs.repo }}' (ref: ${{ github.event.inputs.ref || 'default branch' }}) checked out with NO files. The app is likely on a different branch, inside a subfolder, or not pushed yet. Re-run with the correct Ref, or move the app to the repo root."
+            exit 1
+          fi
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
