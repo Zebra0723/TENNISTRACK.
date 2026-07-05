@@ -133,6 +133,34 @@ jobs:
             '
           fi
 
+          # Auto-detect the framework and pin it in vercel.json so the deploy
+          # uses the correct build output — even if the Vercel project was
+          # previously created with the wrong preset (e.g. "Other", which looks
+          # for a non-existent public/ dir on a Next.js app).
+          node -e '
+            const fs = require("fs");
+            let pkg = {}; try { pkg = JSON.parse(fs.readFileSync("package.json", "utf8")); } catch (e) {}
+            const deps = Object.assign({}, pkg.dependencies, pkg.devDependencies);
+            const has = (n) => Boolean(deps[n]);
+            const exists = (f) => fs.existsSync(f);
+            let fw = null;
+            if (has("next") || exists("next.config.js") || exists("next.config.mjs") || exists("next.config.ts")) fw = "nextjs";
+            else if (has("@remix-run/react")) fw = "remix";
+            else if (has("astro")) fw = "astro";
+            else if (has("@sveltejs/kit")) fw = "sveltekit";
+            else if (has("nuxt") || has("nuxt3")) fw = "nuxt";
+            else if (has("vite")) fw = "vite";
+            else if (has("react-scripts")) fw = "create-react-app";
+            let cfg = {}; try { cfg = JSON.parse(fs.readFileSync("vercel.json", "utf8")); } catch (e) {}
+            if (fw && !cfg.framework) {
+              cfg.framework = fw;
+              fs.writeFileSync("vercel.json", JSON.stringify(cfg, null, 2));
+              console.log("Pinned framework in vercel.json:", fw);
+            } else {
+              console.log("Framework detection:", fw || "none/static", "(vercel.json left as-is)");
+            }
+          '
+
           # The checked-out target still contains a .git directory pointing at
           # the source repo. Left in place, `vercel deploy` switches into
           # git-connected mode and uploads ZERO files ("There are no files
