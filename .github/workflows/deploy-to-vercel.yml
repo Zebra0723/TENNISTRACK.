@@ -33,6 +33,11 @@ on:
         required: false
         default: ""
         type: string
+      root_directory:
+        description: "Subfolder to deploy from (optional, e.g. 'web')."
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: deploy-${{ github.event.inputs.repository || github.repository }}
@@ -57,7 +62,14 @@ jobs:
           # repo repeatedly updates one project instead of creating new ones.
           NAME=$(echo "$REPO" | tr '/' '-' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g' | cut -c1-100)
           echo "project=$NAME" >> "$GITHUB_OUTPUT"
-          echo "Deploying '$REPO' as Vercel project '$NAME'"
+
+          # Working directory for the deploy: the checkout, plus an optional
+          # subfolder (root_directory) for monorepos / apps not at the repo root.
+          ROOT="${{ github.event.inputs.root_directory }}"
+          WORKDIR="$NAME"
+          if [ -n "$ROOT" ]; then WORKDIR="$NAME/$ROOT"; fi
+          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
+          echo "Deploying '$REPO' (dir: $WORKDIR) as Vercel project '$NAME'"
 
       - name: Checkout target repository
         uses: actions/checkout@v4
@@ -70,7 +82,7 @@ jobs:
           path: ${{ steps.target.outputs.project }}
 
       - name: Inspect checkout
-        working-directory: ${{ steps.target.outputs.project }}
+        working-directory: ${{ steps.target.outputs.workdir }}
         run: |
           echo "Top-level contents of the checked-out repo:"
           ls -la
@@ -95,7 +107,7 @@ jobs:
 
       - name: Deploy
         id: deploy
-        working-directory: ${{ steps.target.outputs.project }}
+        working-directory: ${{ steps.target.outputs.workdir }}
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
